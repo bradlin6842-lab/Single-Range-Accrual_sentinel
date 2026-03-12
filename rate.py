@@ -4,31 +4,39 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # 頁面基本設定
-st.set_page_config(page_title="DSNGL0523 哨兵系統", layout="wide")
+st.set_page_config(page_title="結構型產品哨兵", layout="wide")
 
-st.title("💰Single Range Accrual現金流預測")
-st.caption("產品代碼：DSNGL0523 | SG 法國興業銀行發行")
+st.title("🏦 結構型產品 (Range Accrual) 全功能模擬器")
+st.caption("自定義產品條件與現金流分析")
 
-# --- 側邊欄：加入投資金額 ---
+# --- 側邊欄：設定區 ---
 with st.sidebar:
-    st.header("⚙️ 模擬參數")
-    principal = st.number_input("投資金額 (USD)", value=50000, step=1000)
-    st.divider()
+    st.header("💵 投資金額")
+    principal = st.number_input("本金 (USD)", value=50000, step=1000)
+    
+    st.header("📜 產品配息條件")
+    fixed_rate = st.slider("前半年固定年息 (%)", 0.0, 15.0, 6.8) / 100
+    float_rate = st.slider("半年後最高年息 (%)", 0.0, 10.0, 5.0) / 100
+    
+    st.header("🚧 門檻設定 (Barrier)")
+    accrual_barrier = st.slider("計息區間上限 (%)", 2.0, 6.0, 4.3) / 100
+    call_barrier = st.slider("Autocall 門檻 (%)", 2.0, 6.0, 3.2) / 100
+    
+    st.header("📈 市場預期")
     init_rate = st.slider("目前 CMS 10Y 利率 (%)", 2.0, 6.0, 3.85) / 100
-    vol = st.slider("市場波動率 (%)", 5, 40, 15) / 100
-    sim_count = st.select_slider("模擬路徑數", options=[100, 500, 1000], value=500)
+    vol = st.slider("預測年化波動率 (%)", 5, 50, 15) / 100
+    sim_count = st.select_slider("模擬精確度", options=[100, 500, 1000], value=500)
 
 # --- 核心運算引擎 ---
 def run_simulation():
-    days = 252 * 7
+    days = 252 * 7  # 7年期
     dt = 1/252
-    accrual_limit = 4.3 / 100
-    call_limit = 3.2 / 100
     
     results = []
     sample_paths = []
     
     for i in range(sim_count):
+        # 幾何布朗運動
         shocks = np.random.normal(0, np.sqrt(dt), days)
         path = init_rate * np.exp(np.cumsum(vol * shocks - 0.5 * vol**2 * dt))
         
@@ -37,18 +45,20 @@ def run_simulation():
         status = "到期"
         
         for d in range(days):
-            if d < 126: # 前半年固定 6.8%
-                coupons_pct += (0.068 / 252)
+            if d < 126: # 前半年固定
+                coupons_pct += (fixed_rate / 252)
             else:
-                if (d - 126) % 63 == 0 and path[d] <= call_limit:
+                # 季觀察 Autocall
+                if (d - 126) % 63 == 0 and path[d] <= call_barrier:
                     status = "提前贖回"
                     call_day = d
                     break
-                if path[d] <= accrual_limit:
-                    coupons_pct += (0.05 / 252)
+                # 每日區間計息
+                if path[d] <= accrual_barrier:
+                    coupons_pct += (float_rate / 252)
         
         duration = (call_day + 1) / 252
-        total_usd = coupons_pct * principal # 計算實際美金收益
+        total_usd = coupons_pct * principal
         
         results.append({
             'return': (coupons_pct / duration) * 100,
@@ -59,33 +69,40 @@ def run_simulation():
         if i < 15: sample_paths.append(path[:call_day])
     return pd.DataFrame(results), sample_paths
 
-# --- 執行與顯示結果 ---
+# --- 執行與呈現 ---
 df, paths = run_simulation()
 
-# 第一排：核心指標
+# 第一排：關鍵看板
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("預期總利息 (USD)", f"${df['usd_gain'].mean():,.0f}")
-c2.metric("平均年化回報", f"{df['return'].mean():.2f}%")
+c1.metric("預期總配息 (USD)", f"${df['usd_gain'].mean():,.0f}")
+c2.metric("平均年化收益率", f"{df['return'].mean():.2f}%")
 c3.metric("提前贖回機率", f"{(df['status']=='提前贖回').mean()*100:.1f}%")
-c4.metric("平均持有年限", f"{df['duration'].mean():.1f} 年")
+c4.metric("平均持有時間", f"{df['duration'].mean():.1f} 年")
 
 # 第二排：圖表
-st.subheader("📊 投資體感分析")
+st.divider()
 col_left, col_right = st.columns(2)
 
 with col_left:
-    st.write("**總利息收益分佈 (USD)**")
-    st.bar_chart(df['usd_gain'])
-    st.caption("這張圖顯示了在不同情境下，你最終拿到的總美金利息。")
+    st.subheader("💰 總利息收益分佈")
+    # 自定義分佈圖
+    hist_data = df['usd_gain']
+    fig_hist = go.Figure(data=[go.Histogram(x=hist_data, marker_color='skyblue', nbinsx=20)])
+    fig_hist.update_layout(xaxis_title="美金利息", yaxis_title="發生次數", bargap=0.1)
+    st.plotly_chart(fig_hist, use_container_width=True)
 
 with col_right:
-    st.write("**利率走勢預測**")
-    fig = go.Figure()
+    st.subheader("📈 利率走勢模擬")
+    fig_path = go.Figure()
     for p in paths:
-        fig.add_trace(go.Scatter(y=p, mode='lines', line=dict(width=1), opacity=0.3, showlegend=False))
-    fig.add_hline(y=4.3/100, line_dash="dash", line_color="red")
-    fig.add_hline(y=3.2/100, line_dash="dash", line_color="green")
-    st.plotly_chart(fig, use_container_width=True)
+        fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(width=1), opacity=0.3, showlegend=False))
+    
+    # 加入界線 (依據使用者設定)
+    fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="red", annotation_text=f"上限 {accrual_barrier*100:.1f}%")
+    fig_path.add_hline(y=call_barrier, line_dash="dash", line_color="green", annotation_text=f"Autocall {call_barrier*100:.1f}%")
+    
+    # 座標軸百分比格式
+    fig_path.update_layout(yaxis=dict(tickformat=".1%"), margin=dict(l=0, r=0, t=30, b=0))
+    st.plotly_chart(fig_path, use_container_width=True)
 
-# 底部提醒
-st.info(f"💡 根據模擬，你投入 ${principal:,.0f} 元，大約有 { (df['usd_gain'] > (principal*0.068*0.5)).mean()*100 :.0f}% 的機率領到超過半年的利息。")
+st.info(f"💡 哨兵提示：在目前設定下，您投入 ${principal:,.0f} 元，預期利息約落在 ${df['usd_gain'].min():,.0f} ~ ${df['usd_gain'].max():,.0f} 之間。")
