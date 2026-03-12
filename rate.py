@@ -38,7 +38,7 @@ def get_market_data():
 market_rate, market_vol, move_index = get_market_data()
 
 # --- 2. 介面標題 ---
-st.title("🏛️ 聯準會全自動哨兵系統 (DGS10 + MOVE)")
+st.title("Range Accural哨兵 (Fed DGS10 + MOVE)")
 st.info(f"📡 連線成功！目前市場 10Y 利率：{market_rate:.2f}% | MOVE 波動指數：{move_index:.1f} (建議波動率：{market_vol:.1f}%)")
 
 # --- 3. 側邊欄控制面板 ---
