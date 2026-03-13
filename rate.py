@@ -13,8 +13,10 @@ st.set_page_config(page_title="利率哨兵：數據透明版", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 try:
-    FRED_API_KEY = st.secrets["FRED_API_KEY"]
-    fred = Fred(api_key=FRED_API_KEY)
+raw_key = st.secrets["FRED_API_KEY"]
+FRED_API_KEY = raw_key.strip()  # 加入清洗，刪除隱形換行
+fred = Fred(api_key=FRED_API_KEY)
+
 except Exception as e:
     st.error("❌ Secrets 讀取失敗，請檢查 FRED_API_KEY 設定。")
     st.stop()
