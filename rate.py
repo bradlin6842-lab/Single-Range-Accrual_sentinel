@@ -12,13 +12,23 @@ tw_tz = pytz.timezone('Asia/Taipei')
 
 def get_clean_key():
     try:
-        # 強力清洗：刪除所有引號與空格
-        raw_key = str(st.secrets["FRED_API_KEY"])
-        return raw_key.replace('"', '').replace("'", "").strip()
-    except:
+        # 從 Secrets 抓取原始內容
+        raw_val = st.secrets["FRED_API_KEY"]
+        # 強力去漬：轉字串 -> 全部變小寫 -> 刪除引號 -> 刪除前後空格
+        clean_key = str(raw_val).lower().replace('"', '').replace("'", "").strip()
+        
+        # --- 診斷視窗：會出現在 App 左側選單 ---
+        st.sidebar.subheader("🔍 鑰匙診斷")
+        st.sidebar.code(f"長度: {len(clean_key)} 碼")
+        st.sidebar.code(f"頭尾: {clean_key[:3]}...{clean_key[-3:]}")
+        
+        return clean_key
+    except Exception as e:
+        st.error(f"❌ 無法從 Secrets 讀取 FRED_API_KEY: {e}")
         return None
 
 target_key = get_clean_key()
+
 
 if not target_key:
     st.error("❌ 找不到 FRED_API_KEY，請檢查 Streamlit Secrets 設定。")
