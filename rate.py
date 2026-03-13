@@ -13,13 +13,17 @@ st.set_page_config(page_title="利率哨兵：數據透明版", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 try:
-    raw_key = st.secrets["FRED_API_KEY"]
-    FRED_API_KEY = raw_key.strip()  # 加入清洗，刪除隱形換行
+    # 讀取並強力清洗：刪除所有引號 (")、單引號 (')、空格與換行
+    raw_key = str(st.secrets["FRED_API_KEY"]).replace('"', '').replace("'", "").strip()
+    FRED_API_KEY = raw_key
+    
+    # 初始化連線
     fred = Fred(api_key=FRED_API_KEY)
-
 except Exception as e:
-    st.error("❌ Secrets 讀取失敗，請檢查 FRED_API_KEY 設定。")
+    # 報錯時顯示更詳細的訊息幫助排查
+    st.error(f"❌ Secrets 讀取或連線失敗: {e}")
     st.stop()
+
 
 @st.cache_data(ttl=600) # 縮短緩存時間至 10 分鐘，方便測試更新
 def get_market_data():
