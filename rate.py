@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- 1. Initial Configuration ---
-st.set_page_config(page_title="Rate Sentinel: Customizable Yield", layout="wide")
+st.set_page_config(page_title="Rate Sentinel Pro: Advanced Terms", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 def get_final_key():
@@ -20,34 +20,44 @@ target_key = get_final_key()
 
 @st.cache_data(ttl=600)
 def fetch_live_data(api_key):
-    now = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+    sync_time = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
     base_url = "https://api.stlouisfed.org/fred/series/observations"
-    def get_val(sid):
+    def get_fred_info(sid):
         try:
             url = f"{base_url}?series_id={sid}&api_key={api_key}&file_type=json&sort_order=desc&limit=1"
             res = requests.get(url, timeout=10).json()
-            return float(res['observations'][0]['value'])
-        except: return None
-    t_rate = get_val("DGS10")
-    m_move = get_val("MOVE")
-    return t_rate if t_rate else 4.28, m_move if m_move else 105.0, now
+            val = float(res['observations'][0]['value'])
+            obs_date = res['observations'][0]['date'] # 這是 FRED 數據的實際日期
+            return val, obs_date
+        except: return None, None
+        
+    t_rate, t_date = get_fred_info("DGS10")
+    m_move, _ = get_fred_info("MOVE")
+    return t_rate if t_rate else 4.28, t_date, m_move if m_move else 105.0, sync_time
 
-fred_rate, move_vol_live, up_time = fetch_live_data(target_key)
+# 📡 Fetch from FRED API
+fred_rate, fred_obs_date, move_vol_live, app_sync_time = fetch_live_data(target_key)
 
-# --- 2. Sidebar: The Command Center ---
+# --- 2. Sidebar: Command Center ---
 with st.sidebar:
     st.header("💰 Portfolio Input")
     principal = st.number_input("Principal Amount (USD)", value=50000, step=5000)
     
     st.divider()
-    # --- 新增：配息條件調整區 ---
     st.header("📜 Coupon Structure")
-    fixed_coupon_rate = st.number_input("Fixed Rate (Initial) %", value=6.8, step=0.1) / 100
-    floating_coupon_rate = st.number_input("Floating Rate (Subsequent) %", value=5.0, step=0.1) / 100
+    fixed_coupon_rate = st.number_input("Fixed Rate %", value=6.8, step=0.1) / 100
+    floating_coupon_rate = st.number_input("Floating Rate %", value=5.0, step=0.1) / 100
+    
+    # --- 新增：首段固定期調整 ---
+    fixed_months = st.selectbox("Fixed Period (Months)", options=[6, 12], index=0, 
+                                help="Initial period with fixed coupon payment.")
+    fixed_days = 126 if fixed_months == 6 else 252
     
     st.divider()
     st.header("🔌 Live Data (FRED API)")
-    st.info(f"10Y Treasury: {fred_rate:.2f}% | MOVE: {move_vol_live:.1f}")
+    st.info(f"10Y Treasury: {fred_rate:.2f}%")
+    st.caption(f"FRED Latest Obs: {fred_obs_date}") # 顯示 FRED 最新觀測日期
+    st.info(f"LIVE MOVE Index: {move_vol_live:.1f}")
     
     vol_multiplier = st.slider("Volatility Stress (x)", 0.5, 3.0, 1.0)
     sim_vol = (move_vol_live / 1000) * vol_multiplier
@@ -62,9 +72,11 @@ with st.sidebar:
     annual_pd = pd_map[issuer_rating] / 100
     
     accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.3) / 100
+    # 修改：Autocall Barrier 現在會影響圖表顏色
     call_barrier = st.slider("Autocall Barrier (%)", 2.5, 4.0, 3.2) / 100
+    st.caption(f"App Sync: {app_sync_time}")
 
-# --- 3. Dual-Scenario Logic (Updated with dynamic coupons) ---
+# --- 3. Dual-Scenario Logic ---
 def run_comparison_sim(rates_dict, p_val, volatility):
     days, dt = 252 * 7, 1/252
     all_results, all_paths = {}, {}
@@ -74,13 +86,14 @@ def run_comparison_sim(rates_dict, p_val, volatility):
             shocks = np.random.normal(0, np.sqrt(dt), days)
             path = (start_rate/100) * np.exp(np.cumsum(volatility * shocks - 0.5 * volatility**2 * dt))
             
-            # 使用手動輸入的固定利率 (假設前半年固定，則除以 2)
-            coupons = fixed_coupon_rate / 2 
+            # 根據選擇的固定期計算首段利息
+            initial_coupons = fixed_coupon_rate * (fixed_months / 12)
+            coupons = initial_coupons
             call_day = days
-            for d in range(126, days):
-                if (d-126) % 63 == 0 and path[d] <= call_barrier:
+            # 從固定期結束後開始觀察
+            for d in range(fixed_days, days):
+                if (d-fixed_days) % 63 == 0 and path[d] <= call_barrier:
                     call_day = d; break
-                # 使用手動輸入的浮動利率
                 if path[d] <= accrual_barrier: 
                     coupons += (floating_coupon_rate / 252)
             
@@ -97,10 +110,9 @@ scenarios = {"Treasury (FRED)": fred_rate, "SOFR CMS (Bloomberg)": sofr_rate}
 sim_data, sim_paths = run_comparison_sim(scenarios, principal, sim_vol)
 
 # --- 4. Main Dashboard ---
-st.title("🏛️ Sentinel: Full Custom Yield Dashboard")
-st.warning(f"Simulating with **{fixed_coupon_rate*100:.1f}%** Initial Fixed Rate and **{floating_coupon_rate*100:.1f}%** Floating Accrual Rate.")
+st.title("🏛️ Sentinel Pro: Advanced Wealth Analyzer")
+st.warning(f"Simulating: **{fixed_months} Months Fixed** ({fixed_coupon_rate*100:.1f}%) followed by **{floating_coupon_rate*100:.1f}%** Floating Accrual.")
 
-# Metrics Row
 col1, col2 = st.columns(2)
 colors = {"Treasury (FRED)": "#E74C3C", "SOFR CMS (Bloomberg)": "#2ECC71"}
 for i, (name, data) in enumerate(sim_data.items()):
@@ -115,7 +127,6 @@ for i, (name, data) in enumerate(sim_data.items()):
 
 st.divider()
 
-# Charts
 col_l, col_r = st.columns(2)
 with col_l:
     st.subheader("💰 Total Wealth Distribution")
@@ -138,10 +149,19 @@ with col_r:
     fig_gauge.update_layout(height=400)
     st.plotly_chart(fig_gauge, use_container_width=True)
 
+# --- 修改 1 & 3: 蒙地卡羅路徑圖與 Barrier 顏色 ---
 st.subheader("📈 Monte Carlo Simulation Paths")
 fig_path = go.Figure()
 for name, paths in sim_paths.items():
-    for p in paths: fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(color=colors[name], width=1), opacity=0.3, showlegend=False))
-fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="red")
-fig_path.update_layout(yaxis=dict(tickformat=".1%"), height=450)
+    for p in paths:
+        fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(color=colors[name], width=1), opacity=0.3, showlegend=False))
+
+# 鮮紅色：計息上限
+fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="#FF0000", line_width=3, 
+                   annotation_text="Accrual Barrier (4.3%)", annotation_font_color="#FF0000")
+# 亮青色：提前贖回門檻 (使其在紅綠線中非常清晰)
+fig_path.add_hline(y=call_barrier, line_dash="dash", line_color="#00FFFF", line_width=3, 
+                   annotation_text="Autocall Barrier (3.2%)", annotation_font_color="#00FFFF")
+
+fig_path.update_layout(yaxis=dict(tickformat=".1%", title="Interest Rate Level"), height=500)
 st.plotly_chart(fig_path, use_container_width=True)
