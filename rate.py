@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- 1. Initial Config ---
-st.set_page_config(page_title="Rate Sentinel Pro: Scenario Comparison", layout="wide")
+st.set_page_config(page_title="Rate Sentinel: Total Wealth Edition", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 def get_final_key():
@@ -28,96 +28,106 @@ def fetch_live_data(api_key):
             res = requests.get(url, timeout=10).json()
             return float(res['observations'][0]['value'])
         except: return None
-    # FETCH FROM FRED API
     t_rate = get_val("DGS10")
     m_move = get_val("MOVE")
     return t_rate if t_rate else 4.28, m_move if m_move else 105.0, now
 
-# Live Data from FRED
 fred_rate, move_vol, up_time = fetch_live_data(target_key)
 
-# --- 2. Sidebar: Multi-Scenario Controls ---
+# --- 2. Sidebar: The Command Center ---
 with st.sidebar:
-    st.header("🔌 Live Data (FRED API)")
-    st.info(f"10Y Treasury: {fred_rate:.2f}%")
-    st.info(f"MOVE Index: {move_vol:.1f}")
-    
-    st.header("🖥️ Bloomberg Manual Input")
-    sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.7811, format="%.5f")
+    st.header("💰 Portfolio Input")
+    # This is the primary control for your Principal
+    principal = st.number_input("Principal Amount (USD)", 
+                                value=50000, 
+                                step=5000, 
+                                format="%d",
+                                help="Adjust your initial investment amount here.")
     
     st.divider()
-    st.header("🛡️ Risk & Terms")
-    issuer_rating = st.select_slider("Credit Rating", options=["AAA", "AA", "A", "BBB", "BB"], value="A")
+    st.header("📊 Benchmark & Credit")
+    use_manual = st.checkbox("Use Bloomberg Manual Input", value=True)
+    sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.78113, format="%.5f")
+    current_benchmark = sofr_rate if use_manual else fred_rate
+    
+    issuer_rating = st.select_slider("Issuer Credit Rating", 
+                                     options=["AAA", "AA", "A", "BBB", "BB"], value="A")
     pd_map = {"AAA": 0.02, "AA": 0.05, "A": 0.20, "BBB": 0.50, "BB": 1.50}
     annual_pd = pd_map[issuer_rating] / 100
     
-    vol_adj = st.slider("Volatility Buffer", 0.5, 2.0, 1.0)
-    final_vol = (move_vol / 1000) * vol_adj
-    
+    st.divider()
+    st.header("📜 Term Adjustments")
     accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.3) / 100
     call_barrier = st.slider("Autocall Barrier (%)", 2.5, 4.0, 3.2) / 100
-    st.caption(f"Last Sync: {up_time}")
-
-# --- 3. Dual-Scenario Simulation Logic ---
-def run_comparison_sim(rates_dict, principal=50000):
-    days, dt = 252 * 7, 1/252
-    comparison_results = {}
     
-    for label, start_rate in rates_dict.items():
-        results = []
-        for _ in range(300): # 300 iterations per scenario for performance
-            shocks = np.random.normal(0, np.sqrt(dt), days)
-            path = (start_rate/100) * np.exp(np.cumsum(final_vol * shocks - 0.5 * final_vol**2 * dt))
-            coupons = 0.034
-            call_day = days
-            for d in range(126, days):
-                if (d-126) % 63 == 0 and path[d] <= call_barrier:
-                    call_day = d; break
-                if path[d] <= accrual_barrier: coupons += (0.05 / 252)
-            dur = (call_day + 1) / 252
-            survival = (1 - annual_pd) ** dur
-            results.append({'yield': (coupons/dur)*100, 'usd': coupons*principal*survival})
-        comparison_results[label] = pd.DataFrame(results)
-    return comparison_results
+    vol_factor = st.slider("Volatility Stress (%)", 50, 200, 100) / 100
+    sim_vol = (move_vol / 1000) * vol_factor
 
-scenarios = {"Treasury (FRED)": fred_rate, "SOFR CMS (Bloomberg)": sofr_rate}
-sim_data = run_comparison_sim(scenarios)
+# --- 3. Total Wealth Simulation Logic ---
+def run_wealth_sim(p_rate, principal_val):
+    days, dt = 252 * 7, 1/252
+    results, sample_paths = [], []
+    for i in range(400):
+        shocks = np.random.normal(0, np.sqrt(dt), days)
+        path = (p_rate/100) * np.exp(np.cumsum(sim_vol * shocks - 0.5 * sim_vol**2 * dt))
+        coupons = 0.034 # 1st 6M fixed
+        call_day = days
+        for d in range(126, days):
+            if (d-126) % 63 == 0 and path[d] <= call_barrier:
+                call_day = d; break
+            if path[d] <= accrual_barrier: coupons += (0.05 / 252)
+        
+        dur = (call_day + 1) / 252
+        survival_rate = (1 - annual_pd) ** dur
+        interest_earned = coupons * principal_val
+        # Total Wealth = Principal + Interest (Adjusted for Credit Risk)
+        total_payout = (principal_val + interest_earned) * survival_rate
+        
+        results.append({
+            'yield': (coupons/dur)*100, 
+            'total_payout': total_payout,
+            'interest_only': interest_earned * survival_rate,
+            'dur': dur
+        })
+        if i < 15: sample_paths.append(path[:call_day])
+    return pd.DataFrame(results), sample_paths
 
-# --- 4. Main Dashboard: Scenario Comparison ---
-st.title("🏛️ Sentinel: Scenario Comparison Dashboard")
+df_res, path_res = run_wealth_sim(current_benchmark, principal)
 
-# Comparison Metrics Table
-st.subheader("📊 Scenario Comparison Metrics")
-comp_col1, comp_col2 = st.columns(2)
+# --- 4. Main Dashboard ---
+st.title("🏛️ Sentinel Pro: Total Asset Projection")
 
-for i, (name, data) in enumerate(sim_data.items()):
-    with [comp_col1, comp_col2][i]:
-        st.markdown(f"### {name}")
-        st.metric("Avg. Annual Yield", f"{data['yield'].mean():.2f}%")
-        st.metric("Risk-Adj. Return (USD)", f"${data['usd'].mean():,.0f}")
-        dist = accrual_barrier*100 - scenarios[name]
-        st.metric("Distance to Barrier", f"{dist:.2f}%", delta=f"{dist:.2f}%", delta_color="normal")
+# Top Level Metrics
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Current SOFR", f"{current_benchmark:.4f}%")
+m2.metric("Principal Investment", f"${principal:,.0f}")
+m3.metric("Exp. Total Payout", f"${df_res['total_payout'].mean():,.0f}")
+m4.metric("Risk Cost (PD)", f"${(principal + df_res['interest_only'].mean()) * (1 - (1-annual_pd)**df_res['dur'].mean()):,.0f}", delta_color="inverse")
 
 st.divider()
 
-# Overlapping Visualization
+# Charts Area
 col_l, col_r = st.columns(2)
 
 with col_l:
-    st.subheader("💰 Return Distribution Comparison")
+    st.subheader("💰 Total Wealth Distribution (Principal + Interest)")
     fig_comp = go.Figure()
-    colors = {"Treasury (FRED)": "#E74C3C", "SOFR CMS (Bloomberg)": "#2ECC71"}
-    for name, data in sim_data.items():
-        fig_comp.add_trace(go.Violin(x=data['usd'], name=name, line_color=colors[name], box_visible=True, meanline_visible=True))
-    fig_comp.update_layout(xaxis_title="Risk-Adjusted Gain (USD)", height=450, showlegend=False)
+    # Now showing the full wealth distribution starting from your principal
+    fig_comp.add_trace(go.Violin(x=df_res['total_payout'], 
+                                 name='Total Payout at Maturity', 
+                                 line_color="#2ECC71", 
+                                 box_visible=True, 
+                                 meanline_visible=True))
+    fig_comp.update_layout(xaxis_title="Total Projected Wealth (USD)", 
+                           height=450, 
+                           xaxis=dict(range=[principal * 0.9, principal * 1.5])) # Zoom in near principal
     st.plotly_chart(fig_comp, use_container_width=True)
+    st.caption(f"Graph shows projected wealth. Your principal base is ${principal:,.0f}.")
 
 with col_r:
-    st.subheader("🎯 Accrual Safety Gauge (Current SOFR)")
-    # Focus on the more relevant SOFR for the gauge
+    st.subheader("🎯 Real-Time Accrual Monitor")
     fig_gauge = go.Figure(go.Indicator(
-        mode = "gauge+number", value = sofr_rate,
-        title = {'text': "Current SOFR CMS Position"},
+        mode = "gauge+number", value = current_benchmark,
         gauge = {
             'axis': {'range': [2.5, 5.0]},
             'steps' : [
@@ -129,3 +139,10 @@ with col_r:
     ))
     fig_gauge.update_layout(height=400)
     st.plotly_chart(fig_gauge, use_container_width=True)
+
+st.subheader("📈 Interest Rate Simulation Paths")
+fig_path = go.Figure()
+for p in path_res: fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(width=1), opacity=0.3, showlegend=False))
+fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="red", annotation_text="Barrier")
+fig_path.update_layout(yaxis=dict(tickformat=".1%"), height=400)
+st.plotly_chart(fig_path, use_container_width=True)
