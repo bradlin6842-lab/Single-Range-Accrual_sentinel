@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- 1. Initial Configuration ---
-st.set_page_config(page_title="Rate Sentinel Pro: Dual Scenario Comparison", layout="wide")
+st.set_page_config(page_title="Rate Sentinel Pro: Full Metrics Edition", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 def get_final_key():
@@ -28,15 +28,15 @@ def fetch_live_data(api_key):
             res = requests.get(url, timeout=10).json()
             return float(res['observations'][0]['value'])
         except: return None
-    # FETCH FROM FRED API (This uses your API key!)
+    # FETCH FROM FRED API
     t_rate = get_val("DGS10")
     m_move = get_val("MOVE")
     return t_rate if t_rate else 4.28, m_move if m_move else 105.0, now
 
-# 📡 Real-time Data from Fed API
+# 📡 Data from Fed API
 fred_rate, move_vol, up_time = fetch_live_data(target_key)
 
-# --- 2. Sidebar: Dual-Scenario & Principal Control ---
+# --- 2. Sidebar: Controls ---
 with st.sidebar:
     st.header("💰 Portfolio Input")
     principal = st.number_input("Principal Amount (USD)", value=50000, step=5000)
@@ -44,7 +44,7 @@ with st.sidebar:
     st.divider()
     st.header("🔌 Live Data (FRED API)")
     st.info(f"10Y Treasury (DGS10): {fred_rate:.2f}%")
-    st.info(f"MOVE Index: {move_vol:.1f}")
+    st.info(f"MOVE Index (Vol): {move_vol:.1f}")
     
     st.header("🖥️ Bloomberg Input")
     sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.78113, format="%.5f")
@@ -58,11 +58,10 @@ with st.sidebar:
     accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.3) / 100
     call_barrier = st.slider("Autocall Barrier (%)", 2.5, 4.0, 3.2) / 100
     
-    # Use MOVE Index to drive simulation volatility
     sim_vol = (move_vol / 1000)
     st.caption(f"Last Sync: {up_time}")
 
-# --- 3. Dual-Scenario Simulation Logic ---
+# --- 3. Dual-Scenario Logic with Duration ---
 def run_comparison_sim(rates_dict, p_val):
     days, dt = 252 * 7, 1/252
     all_results = {}
@@ -72,16 +71,21 @@ def run_comparison_sim(rates_dict, p_val):
         for _ in range(400):
             shocks = np.random.normal(0, np.sqrt(dt), days)
             path = (start_rate/100) * np.exp(np.cumsum(sim_vol * shocks - 0.5 * sim_vol**2 * dt))
-            coupons = 0.034 # Fixed 1st 6M
+            coupons = 0.034 # 1st 6M Fixed
             call_day = days
+            status_str = "Matured"
+            
             for d in range(126, days):
+                # Quarterly Autocall Observation
                 if (d-126) % 63 == 0 and path[d] <= call_barrier:
-                    call_day = d; break
+                    status_str, call_day = "Autocalled", d
+                    break
                 if path[d] <= accrual_barrier: coupons += (0.05 / 252)
+            
             dur = (call_day + 1) / 252
             survival = (1 - annual_pd) ** dur
             total_wealth = (p_val + (coupons * p_val)) * survival
-            results.append({'wealth': total_wealth, 'yield': (coupons/dur)*100})
+            results.append({'wealth': total_wealth, 'yield': (coupons/dur)*100, 'dur': dur})
         all_results[label] = pd.DataFrame(results)
     return all_results
 
@@ -89,41 +93,41 @@ scenarios = {"Treasury (FRED)": fred_rate, "SOFR CMS (Bloomberg)": sofr_rate}
 sim_data = run_comparison_sim(scenarios, principal)
 
 # --- 4. Main Dashboard ---
-st.title("🏛️ Sentinel: Dual-Scenario Wealth Analyzer")
+st.title("🏛️ Sentinel: Ultimate Risk-Adjusted Dashboard")
 
-# Metrics Comparison Table
+# Comparison Metrics Table (Re-adding Exp. Duration here)
 st.subheader("📊 Scenario Comparison Metrics")
 col1, col2 = st.columns(2)
-
 colors = {"Treasury (FRED)": "#E74C3C", "SOFR CMS (Bloomberg)": "#2ECC71"}
 
 for i, (name, data) in enumerate(sim_data.items()):
     with [col1, col2][i]:
         st.markdown(f"### <span style='color:{colors[name]}'>{name}</span>", unsafe_allow_html=True)
-        st.metric("Avg. Total Wealth", f"${data['wealth'].mean():,.0f}")
-        st.metric("Exp. Annual Yield", f"{data['yield'].mean():.2f}%")
+        # --- Metrics Row ---
+        m_row1, m_row2 = st.columns(2)
+        m_row1.metric("Avg. Total Wealth", f"${data['wealth'].mean():,.0f}")
+        m_row2.metric("Exp. Annual Yield", f"{data['yield'].mean():.2f}%")
+        
+        m_row3, m_row4 = st.columns(2)
+        # BACK AGAIN: Expected Duration
+        m_row3.metric("Exp. Duration", f"{data['dur'].mean():.1f} Years")
         dist = accrual_barrier*100 - scenarios[name]
-        st.metric("Dist. to Barrier", f"{dist:.2f}%")
+        m_row4.metric("Dist. to Barrier", f"{dist:.2f}%")
 
 st.divider()
 
-# Visualization: The "Scenario Comparison" Part
+# Visualization
 col_l, col_r = st.columns(2)
-
 with col_l:
-    st.subheader("💰 Total Wealth Distribution Comparison")
+    st.subheader("💰 Total Wealth Distribution (Principal + Interest)")
     fig_comp = go.Figure()
     for name, data in sim_data.items():
         fig_comp.add_trace(go.Violin(x=data['wealth'], name=name, line_color=colors[name], box_visible=True, meanline_visible=True))
-    
-    fig_comp.update_layout(xaxis_title="Projected Wealth at Maturity (USD)", 
-                           height=500, showlegend=True,
-                           xaxis=dict(range=[principal * 0.9, principal * 1.5]))
+    fig_comp.update_layout(xaxis_title="Wealth at Maturity (USD)", height=500, xaxis=dict(range=[principal * 0.9, principal * 1.5]))
     st.plotly_chart(fig_comp, use_container_width=True)
-    st.caption(f"Red = FED API Scenario | Green = Bloomberg Scenario. Base Principal: ${principal:,.0f}")
 
 with col_r:
-    st.subheader("🎯 Real-Time SOFR CMS Position")
+    st.subheader("🎯 Real-Time Accrual Monitor")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = sofr_rate,
         gauge = {
