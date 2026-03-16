@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- 1. Initial Configuration ---
-st.set_page_config(page_title="Rate Sentinel Pro: Monte Carlo Revival", layout="wide")
+st.set_page_config(page_title="Rate Sentinel: Customizable Yield", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 def get_final_key():
@@ -32,18 +32,25 @@ def fetch_live_data(api_key):
     m_move = get_val("MOVE")
     return t_rate if t_rate else 4.28, m_move if m_move else 105.0, now
 
-# 📡 Fed API Data
-fred_rate, move_vol, up_time = fetch_live_data(target_key)
+fred_rate, move_vol_live, up_time = fetch_live_data(target_key)
 
-# --- 2. Sidebar Controls ---
+# --- 2. Sidebar: The Command Center ---
 with st.sidebar:
     st.header("💰 Portfolio Input")
     principal = st.number_input("Principal Amount (USD)", value=50000, step=5000)
     
     st.divider()
+    # --- 新增：配息條件調整區 ---
+    st.header("📜 Coupon Structure")
+    fixed_coupon_rate = st.number_input("Fixed Rate (Initial) %", value=6.8, step=0.1) / 100
+    floating_coupon_rate = st.number_input("Floating Rate (Subsequent) %", value=5.0, step=0.1) / 100
+    
+    st.divider()
     st.header("🔌 Live Data (FRED API)")
-    st.info(f"10Y Treasury (DGS10): {fred_rate:.2f}%")
-    st.info(f"MOVE Index (Vol): {move_vol:.1f}")
+    st.info(f"10Y Treasury: {fred_rate:.2f}% | MOVE: {move_vol_live:.1f}")
+    
+    vol_multiplier = st.slider("Volatility Stress (x)", 0.5, 3.0, 1.0)
+    sim_vol = (move_vol_live / 1000) * vol_multiplier
     
     st.header("🖥️ Bloomberg Input")
     sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.78113, format="%.5f")
@@ -56,47 +63,46 @@ with st.sidebar:
     
     accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.3) / 100
     call_barrier = st.slider("Autocall Barrier (%)", 2.5, 4.0, 3.2) / 100
-    
-    sim_vol = (move_vol / 1000)
-    st.caption(f"Last Sync: {up_time}")
 
-# --- 3. Dual-Scenario Logic with Paths ---
-def run_full_comparison(rates_dict, p_val):
+# --- 3. Dual-Scenario Logic (Updated with dynamic coupons) ---
+def run_comparison_sim(rates_dict, p_val, volatility):
     days, dt = 252 * 7, 1/252
     all_results, all_paths = {}, {}
-    
     for label, start_rate in rates_dict.items():
         results, paths = [], []
         for i in range(400):
             shocks = np.random.normal(0, np.sqrt(dt), days)
-            path = (start_rate/100) * np.exp(np.cumsum(sim_vol * shocks - 0.5 * sim_vol**2 * dt))
-            coupons = 0.034
+            path = (start_rate/100) * np.exp(np.cumsum(volatility * shocks - 0.5 * volatility**2 * dt))
+            
+            # 使用手動輸入的固定利率 (假設前半年固定，則除以 2)
+            coupons = fixed_coupon_rate / 2 
             call_day = days
             for d in range(126, days):
                 if (d-126) % 63 == 0 and path[d] <= call_barrier:
                     call_day = d; break
-                if path[d] <= accrual_barrier: coupons += (0.05 / 252)
+                # 使用手動輸入的浮動利率
+                if path[d] <= accrual_barrier: 
+                    coupons += (floating_coupon_rate / 252)
             
             dur = (call_day + 1) / 252
             survival = (1 - annual_pd) ** dur
-            total_wealth = (p_val + (coupons * p_val)) * survival
-            results.append({'wealth': total_wealth, 'yield': (coupons/dur)*100, 'dur': dur})
-            if i < 10: paths.append(path[:call_day]) # Save 10 sample paths per scenario
-        
+            results.append({'wealth': (p_val + (coupons * p_val)) * survival, 
+                            'yield': (coupons/dur)*100, 'dur': dur})
+            if i < 10: paths.append(path[:call_day])
         all_results[label] = pd.DataFrame(results)
         all_paths[label] = paths
     return all_results, all_paths
 
 scenarios = {"Treasury (FRED)": fred_rate, "SOFR CMS (Bloomberg)": sofr_rate}
-sim_data, sim_paths = run_full_comparison(scenarios, principal)
+sim_data, sim_paths = run_comparison_sim(scenarios, principal, sim_vol)
 
 # --- 4. Main Dashboard ---
-st.title("🏛️ Sentinel: Full Monte Carlo Portfolio Analyzer")
+st.title("🏛️ Sentinel: Full Custom Yield Dashboard")
+st.warning(f"Simulating with **{fixed_coupon_rate*100:.1f}%** Initial Fixed Rate and **{floating_coupon_rate*100:.1f}%** Floating Accrual Rate.")
 
-# Metrics Summary
+# Metrics Row
 col1, col2 = st.columns(2)
 colors = {"Treasury (FRED)": "#E74C3C", "SOFR CMS (Bloomberg)": "#2ECC71"}
-
 for i, (name, data) in enumerate(sim_data.items()):
     with [col1, col2][i]:
         st.markdown(f"### <span style='color:{colors[name]}'>{name}</span>", unsafe_allow_html=True)
@@ -109,10 +115,10 @@ for i, (name, data) in enumerate(sim_data.items()):
 
 st.divider()
 
-# Visualization
+# Charts
 col_l, col_r = st.columns(2)
 with col_l:
-    st.subheader("💰 Total Wealth Comparison")
+    st.subheader("💰 Total Wealth Distribution")
     fig_comp = go.Figure()
     for name, data in sim_data.items():
         fig_comp.add_trace(go.Violin(x=data['wealth'], name=name, line_color=colors[name], box_visible=True, meanline_visible=True))
@@ -120,28 +126,22 @@ with col_l:
     st.plotly_chart(fig_comp, use_container_width=True)
 
 with col_r:
-    st.subheader("🎯 Current SOFR CMS Monitor")
+    st.subheader("🎯 Real-Time Accrual Monitor")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = sofr_rate,
         gauge = {
             'axis': {'range': [2.5, 5.0]},
-            'steps' : [{'range': [0, 3.2], 'color': "#D5F5E3"}, {'range': [3.2, 4.3], 'color': "#EBEDEF"}, {'range': [4.3, 5.0], 'color': "#FADBD8"}],
-            'threshold': {'line': {'color': "red", 'width': 4}, 'value': 4.3}
+            'steps' : [{'range': [0, call_barrier*100], 'color': "#D5F5E3"}, {'range': [call_barrier*100, accrual_barrier*100], 'color': "#EBEDEF"}, {'range': [accrual_barrier*100, 5.0], 'color': "#FADBD8"}],
+            'threshold': {'line': {'color': "red", 'width': 4}, 'value': accrual_barrier*100}
         }
     ))
     fig_gauge.update_layout(height=400)
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-# THE RETURN OF MONTE CARLO PATHS
-st.subheader("📈 Monte Carlo Simulation Paths: Treasury (Red) vs. SOFR (Green)")
+st.subheader("📈 Monte Carlo Simulation Paths")
 fig_path = go.Figure()
-
 for name, paths in sim_paths.items():
-    for p in paths:
-        fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(color=colors[name], width=1), opacity=0.3, showlegend=False))
-
-fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="red", annotation_text="Accrual Barrier")
-fig_path.add_hline(y=call_barrier, line_dash="dash", line_color="green", annotation_text="Autocall")
-fig_path.update_layout(yaxis=dict(tickformat=".1%", title="Interest Rate Level"), height=500, margin=dict(l=0,r=0,b=0,t=30))
+    for p in paths: fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(color=colors[name], width=1), opacity=0.3, showlegend=False))
+fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="red")
+fig_path.update_layout(yaxis=dict(tickformat=".1%"), height=450)
 st.plotly_chart(fig_path, use_container_width=True)
-st.caption("Faded lines represent individual simulation paths. Red paths use FRED Treasury data, Green paths use Bloomberg SOFR data.")
