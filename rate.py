@@ -41,12 +41,12 @@ fred_rate, fred_obs_date, move_vol_live, app_sync_time = fetch_live_data(target_
 # --- 2. Sidebar: Command Center ---
 with st.sidebar:
     st.header("💰 Portfolio Input")
-    principal = st.number_input("Principal Amount (USD)", value=50000, step=5000)
+    principal = st.number_input("Principal Amount (USD)", value=100000, step=5000)
     
     st.divider()
     st.header("📜 Coupon Structure")
-    fixed_coupon_rate = st.number_input("Fixed Rate %", value=6.8, step=0.1) / 100
-    floating_coupon_rate = st.number_input("Floating Rate %", value=5.0, step=0.1) / 100
+    fixed_coupon_rate = st.number_input("Fixed Rate %", value=14.95, step=0.1) / 100
+    floating_coupon_rate = st.number_input("Floating Rate %", value=6.0, step=0.1) / 100
     
     # --- 新增：首段固定期調整 ---
     fixed_months = st.selectbox("Fixed Period (Months)", options=[6, 12], index=0, 
