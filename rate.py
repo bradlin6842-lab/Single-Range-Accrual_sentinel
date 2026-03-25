@@ -60,7 +60,7 @@ with st.sidebar:
     sim_vol = (move_vol_live / 1000) * vol_multiplier
     
     st.header("🖥️ Bloomberg Input")
-    sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.78113, format="%.5f")
+    sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.9013, format="%.5f")
     
     st.divider()
     st.header("🛡️ Credit Risk")
