@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- 1. Initial Configuration ---
-st.set_page_config(page_title="Rate Sentinel Pro: Universal Analyzer", layout="wide")
+st.set_page_config(page_title="Rate Sentinel Pro: High Yield Edition", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 def get_final_key():
@@ -34,45 +34,46 @@ def fetch_live_data(api_key):
     m_move, _ = get_fred_info("MOVE")
     return t_rate if t_rate else 4.28, t_date, m_move if m_move else 105.0, sync_time
 
-# 📡 Data from Fed API
+# 📡 Fetch Data from Fed API
 fred_rate, fred_obs_date, move_vol_live, app_sync_time = fetch_live_data(target_key)
 
-# --- 2. Sidebar: Universal Controls ---
+# --- 2. Sidebar: Updated Product Terms ---
 with st.sidebar:
-    st.header("⏳ Investment Term & Structure")
-    # 1. 可調年期 (1-15年)
-    total_years = st.slider("Total Tenor (Years)", 1, 15, 7, help="Adjust the total maturity of the bond.")
-    # 2. 提前贖回開關
-    enable_autocall = st.toggle("Enable Autocall Feature", value=True, help="Toggle whether the bank can redeem the bond early.")
+    st.header("⏳ Investment Structure")
+    total_years = st.slider("Total Tenor (Years)", 1, 15, 10) # 預設改為 10 年
+    enable_autocall = st.toggle("Enable Autocall Feature", value=True)
     
     st.divider()
-    st.header("💰 Portfolio & Coupons")
+    st.header("💰 Portfolio & New Coupons")
     principal = st.number_input("Principal Amount (USD)", value=50000, step=5000)
-    fixed_coupon_rate = st.number_input("Fixed Rate %", value=6.8, step=0.1) / 100
-    floating_coupon_rate = st.number_input("Floating Rate %", value=5.0, step=0.1) / 100
-    fixed_months = st.selectbox("Fixed Period (Months)", options=[6, 12], index=0)
-    fixed_days = 126 if fixed_months == 6 else 252
+    
+    # 更改條件：首年 7.7%，之後 6.0%
+    fixed_coupon_rate = st.number_input("Fixed Rate % (Year 1)", value=7.7, step=0.1) / 100
+    floating_coupon_rate = st.number_input("Floating Rate % (Year 2+)", value=6.0, step=0.1) / 100
+    
+    # 固定期更改為 12 個月
+    fixed_months = st.selectbox("Fixed Period (Months)", options=[6, 12], index=1)
+    fixed_days = 252 if fixed_months == 12 else 126
     
     st.divider()
-    st.header("🔌 Market Data")
-    st.info(f"10Y Treasury: {fred_rate:.2f}% (Obs: {fred_obs_date})")
+    st.header("🔌 Market Context")
+    st.info(f"10Y Treasury: {fred_rate:.2f}%")
     vol_multiplier = st.slider("Volatility Stress (x)", 0.5, 3.0, 1.0)
     sim_vol = (move_vol_live / 1000) * vol_multiplier
     
     st.header("🖥️ Bloomberg Input")
-    sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.9013, format="%.5f")
+    sofr_rate = st.number_input("10Y SOFR CMS (%)", value=3.78113, format="%.5f")
     
     st.divider()
     st.header("🛡️ Credit Risk")
-    # 更精細的評分系統
     issuer_rating = st.select_slider("Rating", options=["AAA", "AA", "A", "BBB", "BB", "B"], value="A")
     pd_map = {"AAA": 0.0001, "AA": 0.0003, "A": 0.0007, "BBB": 0.002, "BB": 0.01, "B": 0.04}
     annual_pd = pd_map[issuer_rating]
     
-    accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.3) / 100
-    call_barrier = st.slider("Autocall Barrier (%)", 2.5, 4.0, 3.2) / 100 if enable_autocall else 0.0
+    accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.30) / 100
+    call_barrier = st.slider("Autocall Barrier (%)", 2.5, 4.0, 3.20) / 100 if enable_autocall else 0.0
 
-# --- 3. Advanced Simulation Engine ---
+# --- 3. Simulation Engine ---
 def run_comparison_sim(rates_dict, p_val, volatility, t_years):
     days = 252 * t_years
     dt = 1/252
@@ -83,13 +84,17 @@ def run_comparison_sim(rates_dict, p_val, volatility, t_years):
             shocks = np.random.normal(0, np.sqrt(dt), days)
             path = (start_rate/100) * np.exp(np.cumsum(volatility * shocks - 0.5 * volatility**2 * dt))
             
-            coupons = fixed_coupon_rate * (fixed_months / 12)
+            # 第一年固定配息邏輯
+            initial_coupons = fixed_coupon_rate * (fixed_months / 12)
+            coupons = initial_coupons
             call_day = days
+            
+            # 第二年起開始觀察計息與贖回
             for d in range(fixed_days, days):
-                # 只有開關開啟時才判斷 Autocall
                 if enable_autocall and (d-fixed_days) % 63 == 0 and path[d] <= call_barrier:
                     call_day = d; break
-                if path[d] <= accrual_barrier: coupons += (floating_coupon_rate / 252)
+                if path[d] <= accrual_barrier: 
+                    coupons += (floating_coupon_rate / 252)
             
             dur = (call_day + 1) / 252
             survival = (1 - annual_pd) ** dur
@@ -103,10 +108,9 @@ def run_comparison_sim(rates_dict, p_val, volatility, t_years):
 scenarios = {"Treasury (FRED)": fred_rate, "SOFR CMS (Bloomberg)": sofr_rate}
 sim_data, sim_paths = run_comparison_sim(scenarios, principal, sim_vol, total_years)
 
-# --- 4. Main Dashboard ---
-st.title("🏛️ Sentinel: Multi-Asset Structure Analyzer")
-status_txt = f"[{total_years}Y] Fixed {fixed_months}M @ {fixed_coupon_rate*100:.1f}% | Autocall: {'ON' if enable_autocall else 'OFF'}"
-st.warning(status_txt)
+# --- 4. Dashboard Display ---
+st.title("🏛️ Sentinel Pro: High Yield Scenario Analysis")
+st.success(f"Config: Year 1 Fixed **{fixed_coupon_rate*100:.1f}%** | Year 2+ Floating **{floating_coupon_rate*100:.1f}%** (Barrier 4.30%)")
 
 col1, col2 = st.columns(2)
 colors = {"Treasury (FRED)": "#E74C3C", "SOFR CMS (Bloomberg)": "#2ECC71"}
@@ -122,17 +126,18 @@ for i, (name, data) in enumerate(sim_data.items()):
 
 st.divider()
 
+# Visualization
 col_l, col_r = st.columns(2)
 with col_l:
-    st.subheader("💰 Asset Projection (Maturity)")
+    st.subheader("💰 Total Wealth Comparison")
     fig_comp = go.Figure()
     for name, data in sim_data.items():
         fig_comp.add_trace(go.Violin(x=data['wealth'], name=name, line_color=colors[name], box_visible=True, meanline_visible=True))
-    fig_comp.update_layout(xaxis_title="USD", height=450, xaxis=dict(range=[principal * 0.85, principal * 1.6]))
+    fig_comp.update_layout(xaxis_title="Wealth at Maturity (USD)", height=450, xaxis=dict(range=[principal * 0.9, principal * 1.8]))
     st.plotly_chart(fig_comp, use_container_width=True)
 
 with col_r:
-    st.subheader("🎯 Accrual Safety Gauge")
+    st.subheader("🎯 CMS Safety Gauge")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = sofr_rate,
         gauge = {
@@ -146,11 +151,11 @@ with col_r:
     fig_gauge.update_layout(height=400)
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-st.subheader("📈 Interest Rate Simulation Paths")
+st.subheader("📈 Monte Carlo Simulation Paths")
 fig_path = go.Figure()
 for name, paths in sim_paths.items():
     for p in paths: fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(color=colors[name], width=1), opacity=0.3, showlegend=False))
-fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="#FF0000", line_width=3, annotation_text="Barrier")
+fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="#FF0000", line_width=3, annotation_text="Barrier 4.30%")
 if enable_autocall:
     fig_path.add_hline(y=call_barrier, line_dash="dash", line_color="#00FFFF", line_width=3, annotation_text="Autocall")
 fig_path.update_layout(yaxis=dict(tickformat=".1%", title="Rate Level"), height=500)
