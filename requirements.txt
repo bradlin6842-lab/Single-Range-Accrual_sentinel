@@ -1,5 +1,5 @@
-streamlit
-numpy
+pytz
+requests
 pandas
+numpy
 plotly
-fredapi
