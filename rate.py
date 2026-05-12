@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 
 # --- 1. Initial Configuration ---
-st.set_page_config(page_title="Rate Sentinel Pro: High Yield Edition", layout="wide")
+st.set_page_config(page_title="Rate Sentinel Pro: High Cushion Edition", layout="wide")
 tw_tz = pytz.timezone('Asia/Taipei')
 
 def get_final_key():
@@ -34,30 +34,30 @@ def fetch_live_data(api_key):
     m_move, _ = get_fred_info("MOVE")
     return t_rate if t_rate else 4.28, t_date, m_move if m_move else 105.0, sync_time
 
-# 📡 Fetch Data from Fed API
+# 📡 Data from Fed API
 fred_rate, fred_obs_date, move_vol_live, app_sync_time = fetch_live_data(target_key)
 
-# --- 2. Sidebar: Updated Product Terms ---
+# --- 2. Sidebar: Updated to 9.1% / 6% / 4.4% ---
 with st.sidebar:
     st.header("⏳ Investment Structure")
-    total_years = st.slider("Total Tenor (Years)", 1, 15, 10) # 預設改為 10 年
+    total_years = st.slider("Total Tenor (Years)", 1, 15, 10)
     enable_autocall = st.toggle("Enable Autocall Feature", value=True)
     
     st.divider()
-    st.header("💰 Portfolio & New Coupons")
+    st.header("💰 Portfolio & Coupons")
     principal = st.number_input("Principal Amount (USD)", value=50000, step=5000)
     
-    # 更改條件：首年 7.7%，之後 6.0%
-    fixed_coupon_rate = st.number_input("Fixed Rate % (Year 1)", value=7.7, step=0.1) / 100
-    floating_coupon_rate = st.number_input("Floating Rate % (Year 2+)", value=6.0, step=0.1) / 100
+    # 根據你的要求更新：前半年固定 9.1%，後續 6.0%
+    fixed_coupon_rate = st.number_input("Fixed Rate % (Initial)", value=9.1, step=0.1) / 100
+    floating_coupon_rate = st.number_input("Floating Rate % (Post-Fixed)", value=6.0, step=0.1) / 100
     
-    # 固定期更改為 12 個月
-    fixed_months = st.selectbox("Fixed Period (Months)", options=[6, 12], index=1)
-    fixed_days = 252 if fixed_months == 12 else 126
+    # 設定為前半年 (6個月)
+    fixed_months = st.selectbox("Fixed Period (Months)", options=[6, 12], index=0)
+    fixed_days = 126 if fixed_months == 6 else 252
     
     st.divider()
-    st.header("🔌 Market Context")
-    st.info(f"10Y Treasury: {fred_rate:.2f}%")
+    st.header("🔌 Market Data")
+    st.info(f"10Y Treasury: {fred_rate:.2f}% (Obs: {fred_obs_date})")
     vol_multiplier = st.slider("Volatility Stress (x)", 0.5, 3.0, 1.0)
     sim_vol = (move_vol_live / 1000) * vol_multiplier
     
@@ -70,7 +70,8 @@ with st.sidebar:
     pd_map = {"AAA": 0.0001, "AA": 0.0003, "A": 0.0007, "BBB": 0.002, "BB": 0.01, "B": 0.04}
     annual_pd = pd_map[issuer_rating]
     
-    accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.30) / 100
+    # 更新門檻為 4.40%
+    accrual_barrier = st.slider("Accrual Barrier (%)", 3.5, 5.5, 4.40) / 100
     call_barrier = st.slider("Autocall Barrier (%)", 2.5, 4.0, 3.20) / 100 if enable_autocall else 0.0
 
 # --- 3. Simulation Engine ---
@@ -84,15 +85,15 @@ def run_comparison_sim(rates_dict, p_val, volatility, t_years):
             shocks = np.random.normal(0, np.sqrt(dt), days)
             path = (start_rate/100) * np.exp(np.cumsum(volatility * shocks - 0.5 * volatility**2 * dt))
             
-            # 第一年固定配息邏輯
+            # 首半年固定配息邏輯
             initial_coupons = fixed_coupon_rate * (fixed_months / 12)
             coupons = initial_coupons
             call_day = days
             
-            # 第二年起開始觀察計息與贖回
             for d in range(fixed_days, days):
                 if enable_autocall and (d-fixed_days) % 63 == 0 and path[d] <= call_barrier:
                     call_day = d; break
+                # 計息門檻判斷 (CMS <= 4.4%)
                 if path[d] <= accrual_barrier: 
                     coupons += (floating_coupon_rate / 252)
             
@@ -108,9 +109,9 @@ def run_comparison_sim(rates_dict, p_val, volatility, t_years):
 scenarios = {"Treasury (FRED)": fred_rate, "SOFR CMS (Bloomberg)": sofr_rate}
 sim_data, sim_paths = run_comparison_sim(scenarios, principal, sim_vol, total_years)
 
-# --- 4. Dashboard Display ---
-st.title("🏛️ Sentinel Pro: High Yield Scenario Analysis")
-st.success(f"Config: Year 1 Fixed **{fixed_coupon_rate*100:.1f}%** | Year 2+ Floating **{floating_coupon_rate*100:.1f}%** (Barrier 4.30%)")
+# --- 4. Main Dashboard ---
+st.title("🏛️ Sentinel Pro: 9.1% High Cushion Analysis")
+st.warning(f"Strategy: **First 6M Fixed @ {fixed_coupon_rate*100:.1f}%** | Barrier: **CMS <= {accrual_barrier*100:.2f}%**")
 
 col1, col2 = st.columns(2)
 colors = {"Treasury (FRED)": "#E74C3C", "SOFR CMS (Bloomberg)": "#2ECC71"}
@@ -126,18 +127,17 @@ for i, (name, data) in enumerate(sim_data.items()):
 
 st.divider()
 
-# Visualization
 col_l, col_r = st.columns(2)
 with col_l:
-    st.subheader("💰 Total Wealth Comparison")
+    st.subheader("💰 Asset Projection Comparison")
     fig_comp = go.Figure()
     for name, data in sim_data.items():
         fig_comp.add_trace(go.Violin(x=data['wealth'], name=name, line_color=colors[name], box_visible=True, meanline_visible=True))
-    fig_comp.update_layout(xaxis_title="Wealth at Maturity (USD)", height=450, xaxis=dict(range=[principal * 0.9, principal * 1.8]))
+    fig_comp.update_layout(xaxis_title="USD at Maturity", height=450, xaxis=dict(range=[principal * 0.9, principal * 1.8]))
     st.plotly_chart(fig_comp, use_container_width=True)
 
 with col_r:
-    st.subheader("🎯 CMS Safety Gauge")
+    st.subheader("🎯 Real-Time Accrual Gauge")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = sofr_rate,
         gauge = {
@@ -151,11 +151,11 @@ with col_r:
     fig_gauge.update_layout(height=400)
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-st.subheader("📈 Monte Carlo Simulation Paths")
+st.subheader("📈 Monte Carlo Paths (Barrier: 4.4%)")
 fig_path = go.Figure()
 for name, paths in sim_paths.items():
     for p in paths: fig_path.add_trace(go.Scatter(y=p, mode='lines', line=dict(color=colors[name], width=1), opacity=0.3, showlegend=False))
-fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="#FF0000", line_width=3, annotation_text="Barrier 4.30%")
+fig_path.add_hline(y=accrual_barrier, line_dash="dash", line_color="#FF0000", line_width=3, annotation_text="Barrier 4.40%")
 if enable_autocall:
     fig_path.add_hline(y=call_barrier, line_dash="dash", line_color="#00FFFF", line_width=3, annotation_text="Autocall")
 fig_path.update_layout(yaxis=dict(tickformat=".1%", title="Rate Level"), height=500)
